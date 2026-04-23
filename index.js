@@ -1,111 +1,149 @@
-'use strict';
+/*!
+ * vary
+ * Copyright(c) 2014-2017 Douglas Christopher Wilson
+ * MIT Licensed
+ */
 
-var inspect = require('object-inspect');
+'use strict'
 
-var $TypeError = require('es-errors/type');
+/**
+ * Module exports.
+ */
 
-/*
-* This function traverses the list returning the node corresponding to the given key.
-*
-* That node is also moved to the head of the list, so that if it's accessed again we don't need to traverse the whole list.
-* By doing so, all the recently used nodes can be accessed relatively quickly.
-*/
-/** @type {import('./list.d.ts').listGetNode} */
-// eslint-disable-next-line consistent-return
-var listGetNode = function (list, key, isDelete) {
-	/** @type {typeof list | NonNullable<(typeof list)['next']>} */
-	var prev = list;
-	/** @type {(typeof list)['next']} */
-	var curr;
-	// eslint-disable-next-line eqeqeq
-	for (; (curr = prev.next) != null; prev = curr) {
-		if (curr.key === key) {
-			prev.next = curr.next;
-			if (!isDelete) {
-				// eslint-disable-next-line no-extra-parens
-				curr.next = /** @type {NonNullable<typeof list.next>} */ (list.next);
-				list.next = curr; // eslint-disable-line no-param-reassign
-			}
-			return curr;
-		}
-	}
-};
+module.exports = vary
+module.exports.append = append
 
-/** @type {import('./list.d.ts').listGet} */
-var listGet = function (objects, key) {
-	if (!objects) {
-		return void undefined;
-	}
-	var node = listGetNode(objects, key);
-	return node && node.value;
-};
-/** @type {import('./list.d.ts').listSet} */
-var listSet = function (objects, key, value) {
-	var node = listGetNode(objects, key);
-	if (node) {
-		node.value = value;
-	} else {
-		// Prepend the new node to the beginning of the list
-		objects.next = /** @type {import('./list.d.ts').ListNode<typeof value, typeof key>} */ ({ // eslint-disable-line no-param-reassign, no-extra-parens
-			key: key,
-			next: objects.next,
-			value: value
-		});
-	}
-};
-/** @type {import('./list.d.ts').listHas} */
-var listHas = function (objects, key) {
-	if (!objects) {
-		return false;
-	}
-	return !!listGetNode(objects, key);
-};
-/** @type {import('./list.d.ts').listDelete} */
-// eslint-disable-next-line consistent-return
-var listDelete = function (objects, key) {
-	if (objects) {
-		return listGetNode(objects, key, true);
-	}
-};
+/**
+ * RegExp to match field-name in RFC 7230 sec 3.2
+ *
+ * field-name    = token
+ * token         = 1*tchar
+ * tchar         = "!" / "#" / "$" / "%" / "&" / "'" / "*"
+ *               / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~"
+ *               / DIGIT / ALPHA
+ *               ; any VCHAR, except delimiters
+ */
 
-/** @type {import('.')} */
-module.exports = function getSideChannelList() {
-	/** @typedef {ReturnType<typeof getSideChannelList>} Channel */
-	/** @typedef {Parameters<Channel['get']>[0]} K */
-	/** @typedef {Parameters<Channel['set']>[1]} V */
+var FIELD_NAME_REGEXP = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 
-	/** @type {import('./list.d.ts').RootNode<V, K> | undefined} */ var $o;
+/**
+ * Append a field to a vary header.
+ *
+ * @param {String} header
+ * @param {String|Array} field
+ * @return {String}
+ * @public
+ */
 
-	/** @type {Channel} */
-	var channel = {
-		assert: function (key) {
-			if (!channel.has(key)) {
-				throw new $TypeError('Side channel does not contain ' + inspect(key));
-			}
-		},
-		'delete': function (key) {
-			var deletedNode = listDelete($o, key);
-			if (deletedNode && $o && !$o.next) {
-				$o = void undefined;
-			}
-			return !!deletedNode;
-		},
-		get: function (key) {
-			return listGet($o, key);
-		},
-		has: function (key) {
-			return listHas($o, key);
-		},
-		set: function (key, value) {
-			if (!$o) {
-				// Initialize the linked list as an empty node, so that we don't have to special-case handling of the first node: we can always refer to it as (previous node).next, instead of something like (list).head
-				$o = {
-					next: void undefined
-				};
-			}
-			// eslint-disable-next-line no-extra-parens
-			listSet(/** @type {NonNullable<typeof $o>} */ ($o), key, value);
-		}
-	};
-	return channel;
-};
+function append (header, field) {
+  if (typeof header !== 'string') {
+    throw new TypeError('header argument is required')
+  }
+
+  if (!field) {
+    throw new TypeError('field argument is required')
+  }
+
+  // get fields array
+  var fields = !Array.isArray(field)
+    ? parse(String(field))
+    : field
+
+  // assert on invalid field names
+  for (var j = 0; j < fields.length; j++) {
+    if (!FIELD_NAME_REGEXP.test(fields[j])) {
+      throw new TypeError('field argument contains an invalid header name')
+    }
+  }
+
+  // existing, unspecified vary
+  if (header === '*') {
+    return header
+  }
+
+  // enumerate current values
+  var val = header
+  var vals = parse(header.toLowerCase())
+
+  // unspecified vary
+  if (fields.indexOf('*') !== -1 || vals.indexOf('*') !== -1) {
+    return '*'
+  }
+
+  for (var i = 0; i < fields.length; i++) {
+    var fld = fields[i].toLowerCase()
+
+    // append value (case-preserving)
+    if (vals.indexOf(fld) === -1) {
+      vals.push(fld)
+      val = val
+        ? val + ', ' + fields[i]
+        : fields[i]
+    }
+  }
+
+  return val
+}
+
+/**
+ * Parse a vary header into an array.
+ *
+ * @param {String} header
+ * @return {Array}
+ * @private
+ */
+
+function parse (header) {
+  var end = 0
+  var list = []
+  var start = 0
+
+  // gather tokens
+  for (var i = 0, len = header.length; i < len; i++) {
+    switch (header.charCodeAt(i)) {
+      case 0x20: /*   */
+        if (start === end) {
+          start = end = i + 1
+        }
+        break
+      case 0x2c: /* , */
+        list.push(header.substring(start, end))
+        start = end = i + 1
+        break
+      default:
+        end = i + 1
+        break
+    }
+  }
+
+  // final token
+  list.push(header.substring(start, end))
+
+  return list
+}
+
+/**
+ * Mark that a request is varied on a header field.
+ *
+ * @param {Object} res
+ * @param {String|Array} field
+ * @public
+ */
+
+function vary (res, field) {
+  if (!res || !res.getHeader || !res.setHeader) {
+    // quack quack
+    throw new TypeError('res argument is required')
+  }
+
+  // get existing header
+  var val = res.getHeader('Vary') || ''
+  var header = Array.isArray(val)
+    ? val.join(', ')
+    : String(val)
+
+  // set new header
+  if ((val = append(header, field))) {
+    res.setHeader('Vary', val)
+  }
+}
