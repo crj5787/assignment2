@@ -1,11 +1,13 @@
-/**
-Merges "own" properties from a source to a destination object, including non-enumerable and accessor-defined properties. It retains original values and descriptors, ensuring the destination receives a complete and accurate copy of the source's properties.
+declare namespace getSideChannelList {
+	type Channel<K, V> = {
+		assert: (key: K) => void;
+		has: (key: K) => boolean;
+		get: (key: K) => V | undefined;
+		set: (key: K, value: V) => void;
+		delete: (key: K) => boolean;
+	};
+}
 
-@param destination - The object to receive properties.
-@param source - The object providing properties.
-@param overwrite - Optional boolean to control overwriting of existing properties. Defaults to true.
-@returns The modified destination object.
-*/
-declare function mergeDescriptors<T, U>(destination: T, source: U, overwrite?: boolean): T & U;
+declare function getSideChannelList<V, K>(): getSideChannelList.Channel<K, V>;
 
-export = mergeDescriptors;
+export = getSideChannelList;
